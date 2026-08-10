@@ -33,5 +33,4 @@ Before you begin, ensure you have met the following requirements:
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/yourusername/dex-core.git](https://github.com/yourusername/dex-core.git)
-   cd dex-core
+git clone https://github.com/user6240-dotcom/dex-core.git
