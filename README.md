@@ -1,11 +1,11 @@
-# 🐺 Dex Core (Local AI Desktop Assistant)
+# 🐺 Mixtral AI Core (Local AI Desktop Assistant)
 
 ![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python)
 ![PyQt5](https://img.shields.io/badge/PyQt5-GUI-green?style=for-the-badge&logo=qt)
 ![Ollama](https://img.shields.io/badge/Local_LLM-Ollama-black?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-purple?style=for-the-badge)
 
-**Dex Core** is a fully autonomous, locally hosted AI desktop assistant built in Python. Designed with a hyper-modern, cyberpunk-inspired UI, Dex doesn't just chat—it acts. Using advanced tool-calling and system-level interceptors, Dex can write code, execute Windows commands, bypass OS restrictions, and navigate the web completely independent of cloud APIs.
+**Mixtral AI Core** is a fully autonomous, locally hosted AI desktop assistant built in Python. Designed with a hyper-modern, cyberpunk-inspired UI, Mixtral AI doesn't just chat—it acts. Using advanced tool-calling and system-level interceptors, Mixtral AI can write code, execute Windows commands, bypass OS restrictions, and navigate the web completely independent of cloud APIs.
 
 ---
 
@@ -33,6 +33,5 @@ Before you begin, ensure you have met the following requirements:
 
 1. **Clone the repository:**
    ```bash
-git clone https://github.com/user6240-dotcom/dex-core.git
-
-'''
+  git clone https://github.com/user6240-dotcom/Mixtral-local-AI.git
+   cd Mixtral AI-core
