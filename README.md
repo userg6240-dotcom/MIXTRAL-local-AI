@@ -32,6 +32,6 @@ Before you begin, ensure you have met the following requirements:
 ## 🚀 Installation & Setup
 
 1. **Clone the repository:**
-   ```bash
-  git clone https://github.com/user6240-dotcom/Mixtral-local-AI.git
-   cd Mixtral AI-core
+   ```bash 
+     git clone https://github.com/user6240-dotcom/Mixtral-local-AI.git
+     ```
