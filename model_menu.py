@@ -78,7 +78,7 @@ class ModelMenu(QMenu):
         self.addAction(action)
 
     def trigger_change(self, title, tag):
-        # 🌟 If the safety lock is active, completely ignore the accidental bounce click
+        # 🌟 If the safety lock is active, completely ignore the accidental bounce click.
         if self.click_locked:
             return
             
