@@ -9,24 +9,27 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QRect, QEasingCurve, QTimer
 from PyQt5.QtGui import QColor, QFontDatabase, QFont, QPixmap, QCursor
-from port import query_mist, stop_model
+
+# Import everything needed from our updated port.py
+from port import query_mist, stop_model, get_all_sessions, get_session_history, get_next_session_id
 from settings import SettingsPanel
 from model_menu import ModelMenu
-from canvas import CanvasPanel 
+from canvas import CanvasPanel
 
 # ══════════════════════════════════════════════════════
-#  CUSTOM WIDGET: CYBER CODE BLOCK
+#  CUSTOM WIDGET: CODE BLOCK WITH COPY BUTTON
 # ══════════════════════════════════════════════════════
 class CodeBlockWidget(QFrame):
+    """A custom mini-editor to display code with a copy button."""
     def __init__(self, language: str, code: str):
         super().__init__()
         self.code_text = code
         
         self.setStyleSheet("""
             QFrame {
-                background-color: #09090B;
+                background-color: #0A0A0A;
                 border-radius: 8px;
-                border: 1px solid #27272A;
+                border: 1px solid #1A1A1A;
             }
         """)
         layout = QVBoxLayout(self)
@@ -34,18 +37,18 @@ class CodeBlockWidget(QFrame):
         layout.setSpacing(0)
 
         top_bar = QFrame()
-        top_bar.setStyleSheet("background-color: #18181B; border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom: 1px solid #27272A;")
+        top_bar.setStyleSheet("background-color: #111111; border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom: none;")
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(12, 6, 12, 6)
 
-        lang_label = QLabel(language.upper() if language else "CODE_BLOCK")
-        lang_label.setStyleSheet("color: #00F0FF; font-size: 10px; letter-spacing: 1px; font-weight: bold; background: transparent; border: none;")
+        lang_label = QLabel(language.upper() if language else "CODE")
+        lang_label.setStyleSheet("color: #41a8cc; font-size: 11px; font-weight: bold; background: transparent; border: none;")
 
-        self.copy_btn = QPushButton("COPY")
+        self.copy_btn = QPushButton("📋 Copy")
         self.copy_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.copy_btn.setStyleSheet("""
-            QPushButton { background: transparent; color: #A1A1AA; font-size: 10px; letter-spacing: 1px; border: none; font-weight: bold; }
-            QPushButton:hover { color: #00F0FF; }
+            QPushButton { background: transparent; color: #41ccbc; font-size: 11px; border: none; font-weight: bold; }
+            QPushButton:hover { color: #c8ff50; }
         """)
         self.copy_btn.clicked.connect(self.copy_to_clipboard)
 
@@ -59,12 +62,11 @@ class CodeBlockWidget(QFrame):
         self.text_area.setStyleSheet("""
             QTextEdit {
                 background-color: transparent;
-                color: #E4E4E7;
+                color: #D4D4D4;
                 font-family: Consolas, Monaco, monospace;
                 font-size: 13px;
                 border: none;
-                padding: 12px;
-                selection-background-color: rgba(0, 240, 255, 0.2);
+                padding: 10px;
             }
         """)
         
@@ -77,41 +79,56 @@ class CodeBlockWidget(QFrame):
 
     def copy_to_clipboard(self):
         QApplication.clipboard().setText(self.code_text)
-        self.copy_btn.setText("COPIED")
-        QTimer.singleShot(2000, lambda: self.copy_btn.setText("COPY"))
+        self.copy_btn.setText("✅ Copied!")
+        QTimer.singleShot(2000, lambda: self.copy_btn.setText("📋 Copy"))
+
 
 # ══════════════════════════════════════════════════════
-#  BACKGROUND WORKER THREAD
+#  BACKGROUND WORKER THREAD (7K Engine)
 # ══════════════════════════════════════════════════════
-class MistWorker(QThread):
+class Worker7K(QThread):
     finished = pyqtSignal(str)
 
-    def __init__(self, prompt: str, model_name: str):
+    def __init__(self, prompt: str, model_name: str, session_id: int = None):
         super().__init__()
         self.prompt = prompt
         self.model_name = model_name
+        self.session_id = session_id # Lock the memory to the active session
 
     def run(self):
-        response = query_mist(self.prompt, self.model_name)
+        response = query_mist(self.prompt, self.model_name, self.session_id)
         self.finished.emit(response)
 
+
 # ══════════════════════════════════════════════════════
-#  MAIN APPLICATION UI (HOLOGRAPHIC REDESIGN)
+#  MAIN APPLICATION UI
 # ══════════════════════════════════════════════════════
 class HomeScreen(QWidget):
-    def __init__(self, username="Dev Aggarwal"):
+    def __init__(self, username="guest user"):
         super().__init__()
         
-        self.current_user = str(username)
-        self.setWindowTitle("DEX CORE")
+        if isinstance(username, list):
+            self.current_user = str(username)
+        else:
+            self.current_user = str(username)
+            
+        self.setWindowTitle("Dex Home")
         self.worker = None
         self.first_message_sent = False
-        self.current_theme = "dark"
+        self.current_theme = "light"
         self.current_model_tag = "llama3.1" 
+        self.current_session_id = None # Tracks the active chat memory
+
+        self.nav_buttons = []
+        self.history_buttons = []
 
         font_path = "assets/GoogleSans-VariableFont_GRAD,opsz,wght.ttf"
         font_id = QFontDatabase.addApplicationFont(font_path)
-        self.font_family = "Segoe UI" if font_id == -1 else QFontDatabase.applicationFontFamilies(font_id)[0]
+        
+        if font_id == -1:
+            self.font_family = "Segoe UI" 
+        else:
+            self.font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
 
         app_font = QFont(self.font_family, 11)
         QApplication.setFont(app_font)
@@ -120,78 +137,171 @@ class HomeScreen(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ─── MINIMALIST SIDEBAR ───
+        # ══════════════════════════════════════════════════════
+        #  SIDEBAR
+        # ══════════════════════════════════════════════════════
         self.sidebar = QFrame()
-        self.sidebar.setFixedWidth(240)
+        self.sidebar.setFixedWidth(210)
         side_layout = QVBoxLayout(self.sidebar)
-        side_layout.setContentsMargins(16, 20, 16, 20)
-        side_layout.setSpacing(0)
+        side_layout.setContentsMargins(12, 14, 12, 14)
+        side_layout.setSpacing(2)
 
         header_layout = QHBoxLayout()
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(6)
 
         self.logo_box = QLabel()
-        self.logo_box.setFixedSize(32, 32)
+        self.logo_box.setFixedSize(26, 26)
         self.logo_box.setAlignment(Qt.AlignCenter)
         
         logo_pixmap = QPixmap("wolf.png") 
         if not logo_pixmap.isNull():
-            self.logo_box.setPixmap(logo_pixmap.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.logo_box.setPixmap(logo_pixmap.scaled(26, 26, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.logo_box.setStyleSheet("background: transparent;")
         else:
-            self.logo_box.setText("DX")
+            self.logo_box.setText("7K")
+            self.logo_box.setStyleSheet("background-color: #E8510A; color: white; border-radius: 6px; font-weight: bold; font-size: 13px;")
 
-        self.vibe_label = QLabel("DEX CORE")
-        self.vibe_label.setFont(QFont(self.font_family, 14, QFont.Bold))
-        
+        self.vibe_label = QLabel("Vibe")
+        self.vibe_label.setFont(QFont(self.font_family, 13, QFont.Bold))
+
+        chevron_label = QLabel("∨")
+        chevron_label.setStyleSheet("color: #707070; background: transparent; font-size: 10px;")
+
         header_layout.addWidget(self.logo_box)
         header_layout.addWidget(self.vibe_label)
+        header_layout.addWidget(chevron_label)
         header_layout.addStretch()
-        
-        side_layout.addLayout(header_layout)
-        side_layout.addSpacing(30)
 
-        # Functional New Chat Button
-        self.new_chat_btn = QPushButton("+ NEW SESSION")
-        self.new_chat_btn.setFixedHeight(40)
-        self.new_chat_btn.setCursor(QCursor(Qt.PointingHandCursor))
-        self.new_chat_btn.clicked.connect(self.clear_chat_history)
-        side_layout.addWidget(self.new_chat_btn)
+        self.icon_search = QPushButton("🔍")
+        self.icon_search.setFixedSize(28, 28)
+        self.icon_search.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #A0A0A0;")
+
+        self.icon_panel = QPushButton("⊞")
+        self.icon_panel.setFixedSize(28, 28)
+        self.icon_panel.setStyleSheet("background: transparent; border: none; font-size: 16px; color: #A0A0A0;")
+
+        header_layout.addWidget(self.icon_search)
+        header_layout.addWidget(self.icon_panel)
+        side_layout.addLayout(header_layout)
+        side_layout.addSpacing(10)
+
+        toggle_frame = QFrame()
+        toggle_frame.setFixedHeight(36)
+        toggle_frame.setStyleSheet("background-color: transparent;")
+        toggle_layout = QHBoxLayout(toggle_frame)
+        toggle_layout.setContentsMargins(3, 3, 3, 3)
+        toggle_layout.setSpacing(0)
+
+        self.chat_btn = QPushButton("Chat")
+        self.chat_btn.setFixedHeight(28)
+        self.chat_btn.clicked.connect(self.show_chat)
+
+        self.work_btn = QPushButton("Work")
+        self.work_btn.setFixedHeight(28)
+
+        toggle_layout.addWidget(self.chat_btn)
+        toggle_layout.addWidget(self.work_btn)
+        side_layout.addWidget(toggle_frame)
+        side_layout.addSpacing(6)
+
+        nav_items = [("⊕", "New Chat", True), ("🤖", "Agents", False), ("⊞", "Context", False)]
+
+        for icon, name, active in nav_items:
+            btn = QPushButton(f"  {icon}     {name}")
+            if active:
+                btn.clicked.connect(self.clear_chat_history)
+            self.nav_buttons.append(btn) 
+            side_layout.addWidget(btn)
+
+        side_layout.addSpacing(14)
+
+        proj_row = QHBoxLayout()
+        self.proj_lbl = QLabel("Projects")
+        self.proj_plus = QPushButton("+")
+        self.proj_plus.setFixedSize(20, 20)
+        self.proj_plus.setStyleSheet("QPushButton { background: transparent; color: #606060; border: none; font-size: 16px; padding: 0; } QPushButton:hover { color: #AAAAAA; }")
+        proj_row.addWidget(self.proj_lbl)
+        proj_row.addStretch()
+        proj_row.addWidget(self.proj_plus)
+        side_layout.addLayout(proj_row)
+        side_layout.addSpacing(8)
+
+        self.chats_lbl = QLabel("Chats")
+        side_layout.addWidget(self.chats_lbl)
+        side_layout.addSpacing(4)
+
+        # 🌟 DYNAMIC HISTORY CONTAINER
+        self.history_container = QWidget()
+        self.history_container.setStyleSheet("background: transparent;")
+        self.history_layout = QVBoxLayout(self.history_container)
+        self.history_layout.setContentsMargins(0, 0, 0, 0)
+        self.history_layout.setSpacing(2)
+        side_layout.addWidget(self.history_container)
+        
+       # self.refresh_history_sidebar()
 
         side_layout.addStretch()
 
-        # Profile & Settings block combined
         profile_frame = QFrame()
         profile_frame.setStyleSheet("background: transparent;")
         profile_layout = QHBoxLayout(profile_frame)
-        profile_layout.setContentsMargins(0, 0, 0, 0)
-        profile_layout.setSpacing(12)
+        profile_layout.setContentsMargins(4, 0, 4, 0)
+        profile_layout.setSpacing(8)
 
-        avatar = QLabel(self.current_user[:2].upper())
-        avatar.setFixedSize(36, 36)
+        avatar_text = (self.current_user[:2].upper() if len(self.current_user) >= 2 else "GU")
+        avatar = QLabel(avatar_text)
+        avatar.setFixedSize(30, 30)
         avatar.setAlignment(Qt.AlignCenter)
-        self.avatar_lbl = avatar # Saved for styling
+        avatar.setStyleSheet("background-color: #3f48cc; color: white; border-radius: 6px; font-weight: bold; font-size: 11px;")
 
         user_col = QVBoxLayout()
-        user_col.setSpacing(2)
-        self.name_lbl = QLabel(self.current_user.upper())
-        self.tier_lbl = QLabel("SYS.ADMIN")
+        user_col.setSpacing(0)
+        
+        self.name_lbl = QLabel(self.current_user.lower())
+        self.tier_lbl = QLabel("Free")
         user_col.addWidget(self.name_lbl)
         user_col.addWidget(self.tier_lbl)
 
-        self.settings_btn = QPushButton("⚙️")
-        self.settings_btn.setFixedSize(36, 36)
-        self.settings_btn.setCursor(QCursor(Qt.PointingHandCursor))
-        self.settings_btn.clicked.connect(self.toggle_settings) 
+        self.swap_btn = QPushButton("⇅")
+        self.swap_btn.setFixedSize(24, 24)
+        self.swap_btn.setStyleSheet("background: transparent; border: none; color: #606060; font-size: 14px;")
 
         profile_layout.addWidget(avatar)
         profile_layout.addLayout(user_col)
         profile_layout.addStretch()
-        profile_layout.addWidget(self.settings_btn)
-        
+        profile_layout.addWidget(self.swap_btn)
         side_layout.addWidget(profile_frame)
 
-        # ─── MAIN CONTENT ───
+        action_row = QFrame()
+        action_row.setStyleSheet("background: transparent;")
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(4, 8, 4, 4)
+        action_layout.setSpacing(8)
+
+        self.settings_btn = QPushButton("⚙️")
+        self.settings_btn.setFixedSize(32, 32)
+        self.settings_btn.clicked.connect(self.toggle_settings) 
+
+        self.update_frame = QFrame()
+        update_layout = QHBoxLayout(self.update_frame)
+        update_layout.setContentsMargins(10, 0, 10, 0)
+        
+        self.up_text = QLabel(f"Update: {self.current_user.capitalize()}")
+        update_layout.addWidget(self.up_text)
+
+        self.toggle_pill = QLabel(" ◉ ")
+        self.toggle_pill.setFixedSize(30, 20)
+        self.toggle_pill.setAlignment(Qt.AlignCenter)
+
+        action_layout.addWidget(self.settings_btn)
+        action_layout.addWidget(self.update_frame, 1) 
+        action_layout.addWidget(self.toggle_pill)
+        
+        side_layout.addWidget(action_row)
+
+        # ══════════════════════════════════════════════════════
+        #  MAIN CONTENT AREA & SPLITTER
+        # ══════════════════════════════════════════════════════
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
         self.splitter.setStyleSheet("QSplitter::handle { background-color: transparent; }")
@@ -203,14 +313,14 @@ class HomeScreen(QWidget):
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        # Custom futuristic scrollbar applied in apply_theme
+        self.scroll_area.setStyleSheet("background-color: transparent; border: none;")
         self.scroll_area.hide()
 
         self.chat_container = QWidget()
         self.chat_layout = QVBoxLayout(self.chat_container)
         self.chat_layout.setAlignment(Qt.AlignTop)
         self.chat_layout.setContentsMargins(0, 8, 0, 8)
-        self.chat_layout.setSpacing(15)
+        self.chat_layout.setSpacing(6)
 
         self.scroll_area.setWidget(self.chat_container)
         self.content_layout.addWidget(self.scroll_area)
@@ -220,42 +330,43 @@ class HomeScreen(QWidget):
         self.mascot_label.setStyleSheet("background: transparent;")
         pixmap = QPixmap("wolf.png") 
         if not pixmap.isNull():
-            self.mascot_label.setPixmap(pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.mascot_label.setPixmap(pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
             self.mascot_label.setText("🐺")
-            self.mascot_label.setStyleSheet("font-size: 56px; background: transparent;")
+            self.mascot_label.setStyleSheet("font-size: 48px; background: transparent;")
         self.mascot_label.adjustSize()
 
-        self.welcome_label = QLabel(f"TERMINAL READY, {self.current_user.upper()}", self.content)
-        self.welcome_label.setFont(QFont(self.font_family, 24, QFont.Bold))
+        self.welcome_label = QLabel(f"Welcome, {self.current_user}", self.content)
+        self.welcome_label.setFont(QFont(self.font_family, 26, QFont.Bold))
         self.welcome_label.setAlignment(Qt.AlignCenter)
 
-        # Cleaned up input bar
         self.center_bar = QFrame(self.content)
-        self.center_bar.setMaximumWidth(750)
-        self.center_bar.setMinimumWidth(500)
-        self.center_bar.setFixedHeight(56)
+        self.center_bar.setMaximumWidth(680)
+        self.center_bar.setMinimumWidth(480)
+        self.center_bar.setFixedHeight(52)
 
         self.input_layout = QHBoxLayout(self.center_bar)
-        self.input_layout.setContentsMargins(20, 6, 8, 6)
-        self.input_layout.setSpacing(12)
+        self.input_layout.setContentsMargins(8, 6, 8, 6)
+        self.input_layout.setSpacing(8)
+
+        self.plus_btn = QPushButton("+")
+        self.plus_btn.setFixedSize(34, 34)
 
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("Enter command...")
+        self.search_bar.setPlaceholderText("Type / for quick access")
 
-        self.fast_btn = QPushButton("LLAMA 3.1 ∨")
-        self.fast_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.fast_btn = QPushButton("Dex ∨")
         self.model_dropdown = ModelMenu(self)
         self.model_dropdown.model_changed.connect(self.switch_model)
         self.fast_btn.setMenu(self.model_dropdown)
 
-        self.send_btn = QPushButton("➤")
-        self.send_btn.setFixedSize(40, 40)
-        self.send_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.send_btn = QPushButton("🎤")
+        self.send_btn.setFixedSize(34, 34)
         
         self.send_btn.clicked.connect(self.send_prompt)
         self.search_bar.returnPressed.connect(self.send_prompt)
 
+        self.input_layout.addWidget(self.plus_btn)
         self.input_layout.addWidget(self.search_bar)
         self.input_layout.addWidget(self.fast_btn)
         self.input_layout.addWidget(self.send_btn)
@@ -282,92 +393,192 @@ class HomeScreen(QWidget):
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.splitter)
 
-        self.apply_theme("dark")
+        self.apply_theme("light")
 
     # ══════════════════════════════════════════════════════
-    #  THEME ENGINE (CYBERPUNK NEON AESTHETICS)
+    #  DYNAMIC HISTORY & SESSION ENGINE
+    # ══════════════════════════════════════════════════════
+    def refresh_history_sidebar(self):
+        """Clears and re-populates the sidebar buttons from Chat.txt."""
+        self._clear_layout(self.history_layout)
+        self.history_buttons.clear()
+
+        sessions = get_all_sessions()
+        
+        # Show most recent sessions first
+        for sess in reversed(sessions):
+            sess_id = sess["id"]
+            title = sess["title"]
+            
+            # Truncate long titles for sidebar width
+            display_title = title if len(title) <= 22 else title[:19] + "..."
+            
+            btn = QPushButton(display_title)
+            btn.setCursor(QCursor(Qt.PointingHandCursor))
+            btn.setToolTip(f"{title} ({sess['timestamp']})")
+            
+            # Lambda trick to capture loop variable correctly
+            btn.clicked.connect(lambda checked, s_id=sess_id: self.load_session(s_id))
+            
+            self.history_buttons.append(btn)
+            self.history_layout.addWidget(btn)
+
+        self.apply_theme(self.current_theme)
+
+    def load_session(self, session_id: int):
+        """Loads all conversation messages for the selected session into the chat view."""
+        self.current_session_id = session_id
+        self._clear_layout(self.chat_layout)
+
+        history = get_session_history(session_id)
+        if not history:
+            return
+
+        if not self.first_message_sent:
+            self.first_message_sent = True
+            self.animate_prompt_bar()
+
+        for sender, raw_text in history:
+            if sender == "mist":
+                # Use the bulletproof tool extraction matching port.py
+                pattern = r'[/\\]{2,4}tool=["\']([^"\']+)["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
+                commands = re.findall(pattern, raw_text, re.DOTALL | re.IGNORECASE)
+                
+                messages = []
+                for t_name, t_head, t_val in commands:
+                    if t_name.lower() in ["message", "msg", "reply"]:
+                        clean_val = t_val.replace('\\"', '"').replace('\\\\', '\\').strip()
+                        messages.append(clean_val)
+                
+                if messages:
+                    display_text = "\n\n".join(messages)
+                else:
+                    # Strip out tools to see if there's text left, otherwise fallback
+                    clean_text = re.sub(pattern, '', raw_text).strip()
+                    display_text = clean_text if clean_text else "✅ Task completed."
+            else:
+                display_text = raw_text
+
+            self.add_message(display_text, sender=sender)
+
+        self.show_chat()
+
+    # ══════════════════════════════════════════════════════
+    #  THEME ENGINE
     # ══════════════════════════════════════════════════════
     def apply_theme(self, mode):
         self.current_theme = mode
         
         if mode == "light":
-            bg = "#F8FAFC"
+            bg = "#F9FAFB"
             side_bg = "#FFFFFF"
-            text_main = "#0F172A"
-            text_muted = "#64748B"
-            border = "#E2E8F0"
+            text_main = "#111827"
+            text_muted = "#6B7280"
+            border = "#E5E7EB"
+            bar_bg = "#FFFFFF"
+            btn_active_bg = "#F3F4F6"
+            btn_hover_bg = "#E5E7EB"
+            settings_btn_bg = "#FFFFFF"
             
+            self.settings_panel.btn_light.setStyleSheet("QPushButton { background-color: #3f48cc; color: white; border-radius: 8px; font-weight: bold; }")
+            self.settings_panel.btn_dark.setStyleSheet(f"QPushButton {{ background-color: {settings_btn_bg}; color: {text_muted}; border: 1px solid {border}; border-radius: 8px; font-weight: bold; }}")
+
             self.content.setStyleSheet(f"background-color: {bg};")
             self.sidebar.setStyleSheet(f"background-color: {side_bg}; border-right: 1px solid {border};")
-            self.welcome_label.setStyleSheet(f"color: {text_main}; background: transparent; letter-spacing: -1px;")
-            self.vibe_label.setStyleSheet(f"color: {text_main}; background: transparent; letter-spacing: 1px;")
-            self.name_lbl.setStyleSheet(f"color: {text_main}; font-size: 13px; font-weight: bold; background: transparent; letter-spacing: 1px;")
-            self.tier_lbl.setStyleSheet(f"color: #3B82F6; font-size: 10px; font-weight: bold; background: transparent; letter-spacing: 1px;")
+            self.welcome_label.setStyleSheet(f"color: {text_main}; background: transparent;")
+            self.vibe_label.setStyleSheet(f"color: {text_main}; background: transparent;")
+            self.name_lbl.setStyleSheet(f"color: {text_main}; font-size: 13px; font-weight: bold; background: transparent;")
+            self.tier_lbl.setStyleSheet(f"color: {text_muted}; font-size: 11px; background: transparent;")
+            self.proj_lbl.setStyleSheet(f"color: {text_muted}; font-size: 11px; background: transparent;")
+            self.chats_lbl.setStyleSheet(f"color: {text_muted}; font-size: 11px; background: transparent;")
             
+            self.up_text.setText(f"Update: <span style='color:#3f48cc; font-weight:bold;'>{self.current_user.capitalize()}</span>")
+            self.toggle_pill.setStyleSheet(f"background-color: #3f48cc; border-radius: 10px; color: white; font-size: 10px; font-weight: bold;")
             if not self.logo_box.pixmap():
-                self.logo_box.setStyleSheet("background-color: #3B82F6; color: white; border-radius: 8px; font-weight: bold; font-size: 14px;")
-            self.avatar_lbl.setStyleSheet("background-color: #3B82F6; color: white; border-radius: 18px; font-weight: bold; font-size: 12px;")
+                self.logo_box.setStyleSheet(f"background-color: #3f48cc; color: white; border-radius: 6px; font-weight: bold; font-size: 13px;")
 
-            self.new_chat_btn.setStyleSheet(f"QPushButton {{ background-color: #F1F5F9; color: {text_main}; border-radius: 8px; font-size: 12px; font-weight: bold; letter-spacing: 1px; border: 1px solid {border}; }} QPushButton:hover {{ background-color: #E2E8F0; }}")
+            self.center_bar.setStyleSheet(f"QFrame {{ background-color: {bar_bg}; border: 1px solid {border}; border-radius: 14px; }}")
+            self.search_bar.setStyleSheet(f"QLineEdit {{ background-color: transparent; color: {text_main}; font-size: 13px; border: none; padding: 0px 4px; }}")
+            self.plus_btn.setStyleSheet(f"QPushButton {{ background-color: {btn_active_bg}; color: {text_muted}; border-radius: 9px; font-size: 20px; border: none; }} QPushButton:hover {{ background-color: {btn_hover_bg}; }}")
+            self.fast_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 11px; font-weight: bold; border: none; padding: 0 4px; }} QPushButton:hover {{ color: {text_main}; }}")
+            self.send_btn.setStyleSheet(f"QPushButton {{ background-color: #DCDCDC; color: black; border-radius: 10px; font-size: 14px; border: none; }} QPushButton:hover {{ background-color: white; }}")
 
-            self.center_bar.setStyleSheet(f"QFrame {{ background-color: #FFFFFF; border: 1px solid {border}; border-radius: 28px; }}")
-            self.search_bar.setStyleSheet(f"QLineEdit {{ background-color: transparent; color: {text_main}; font-size: 14px; border: none; padding: 0px; }}")
-            self.fast_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 11px; font-weight: bold; border: none; padding: 0 8px; letter-spacing: 1px; }} QPushButton:hover {{ color: {text_main}; }}")
-            self.send_btn.setStyleSheet("QPushButton { background-color: #3B82F6; color: white; border-radius: 20px; font-size: 16px; border: none; } QPushButton:hover { background-color: #2563EB; }")
-            
-            self.settings_btn.setStyleSheet(f"QPushButton {{ background-color: #F1F5F9; color: {text_muted}; border-radius: 18px; border: 1px solid {border}; }} QPushButton:hover {{ background-color: #E2E8F0; color: {text_main}; }}")
-            
-            self.scroll_area.setStyleSheet("""
-                QScrollArea { background-color: transparent; border: none; }
-                QScrollBar:vertical { background: transparent; width: 6px; margin: 0px; }
-                QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 3px; }
-                QScrollBar::handle:vertical:hover { background: #94A3B8; }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            self.settings_btn.setStyleSheet(f"""
+                QPushButton {{ background-color: {settings_btn_bg}; color: {text_muted}; font-size: 14px; border: 1px solid {border}; border-radius: 8px; }}
+                QPushButton:hover {{ background-color: {btn_active_bg}; color: {text_main}; border: 1px solid #C0C0C0; }}
             """)
+            self.update_frame.setStyleSheet(f"background-color: {settings_btn_bg}; border: 1px solid {border}; border-radius: 8px;")
 
-        else: # 🌟 DARK THEME (NEON CYBERPUNK)
-            bg = "#0D0D12"
-            side_bg = "#111116"
-            text_main = "#FFFFFF"
-            text_muted = "#8B8B9E"
-            border = "#1F1F2E"
+            self.chat_btn.setStyleSheet(f"QPushButton {{ background-color: {btn_active_bg}; color: {text_main}; border-radius: 6px; font-size: 12px; font-weight: bold; padding: 0 12px; }}")
+            self.work_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; border-radius: 6px; font-size: 12px; padding: 0 12px; }} QPushButton:hover {{ background-color: {btn_hover_bg}; color: {text_main}; }}")
+
+            for i, btn in enumerate(self.nav_buttons):
+                if i == 0:
+                    btn.setStyleSheet(f"QPushButton {{ background-color: {btn_active_bg}; color: {text_main}; font-size: 13px; text-align: left; padding: 7px 10px; border-radius: 7px; border: none; }}")
+                else:
+                    btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 13px; text-align: left; padding: 7px 10px; border-radius: 7px; border: none; }} QPushButton:hover {{ background-color: {btn_active_bg}; color: {text_main}; }}")
+
+            for btn in self.history_buttons:
+                btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 12px; text-align: left; padding: 6px 8px; border-radius: 6px; border: none; }} QPushButton:hover {{ background-color: {btn_active_bg}; color: {text_main}; }}")
+
+        else: # 🌟 DARK THEME
+            bg = "#000000"
+            side_bg = "#050505"
+            text_main = "white"
+            text_muted = "#808080"
+            border = "#1a1a1a"
+            bar_bg = "#080808"
             
-            # SciFi Accents
-            c_cyan = "#00F0FF"
-            c_magenta = "#FF003C"
-            c_glass = "rgba(255, 255, 255, 0.03)"
+            c_deep_blue = "#3f48cc"
+            c_light_blue = "#41a8cc"
+            c_teal = "#41ccbc"
+            c_green = "#42cc5b"
+            c_lime = "#c8ff50"
             
+            settings_btn_bg = "#0a0a0a"
+            
+            self.settings_panel.btn_dark.setStyleSheet(f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c_teal}, stop:1 {c_green}); color: black; border-radius: 8px; font-weight: bold; }}")
+            self.settings_panel.btn_light.setStyleSheet(f"QPushButton {{ background-color: {settings_btn_bg}; color: {text_muted}; border-radius: 8px; font-weight: bold; border: 1px solid {border}; }}")
+
             self.content.setStyleSheet(f"background-color: {bg};")
             self.sidebar.setStyleSheet(f"background-color: {side_bg}; border-right: 1px solid {border};")
             
-            self.welcome_label.setStyleSheet(f"color: {text_main}; background: transparent; letter-spacing: 2px;")
-            self.vibe_label.setStyleSheet(f"color: {text_main}; background: transparent; letter-spacing: 2px;")
-            self.name_lbl.setStyleSheet(f"color: {text_main}; font-size: 13px; font-weight: bold; background: transparent; letter-spacing: 1px;")
-            self.tier_lbl.setStyleSheet(f"color: {c_cyan}; font-size: 10px; font-weight: bold; background: transparent; letter-spacing: 1px;")
+            self.welcome_label.setStyleSheet(f"color: {text_main}; background: transparent;")
+            self.vibe_label.setStyleSheet(f"color: {text_main}; background: transparent;")
+            self.name_lbl.setStyleSheet(f"color: {text_main}; font-size: 13px; font-weight: bold; background: transparent;")
+            self.tier_lbl.setStyleSheet(f"color: {c_teal}; font-size: 11px; background: transparent;")
+            self.proj_lbl.setStyleSheet(f"color: {text_muted}; font-size: 11px; background: transparent;")
+            self.chats_lbl.setStyleSheet(f"color: {text_muted}; font-size: 11px; background: transparent;")
 
+            self.up_text.setText(f"Update: <span style='color:{c_lime}; font-weight:bold;'>{self.current_user.capitalize()}</span>")
+            self.toggle_pill.setStyleSheet(f"background-color: {c_green}; border-radius: 10px; color: black; font-size: 10px; font-weight: bold;")
             if not self.logo_box.pixmap():
-                self.logo_box.setStyleSheet(f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c_cyan}, stop:1 {c_magenta}); color: white; border-radius: 8px; font-weight: bold; font-size: 14px;")
-            self.avatar_lbl.setStyleSheet(f"background-color: {border}; color: {c_cyan}; border: 1px solid {c_cyan}; border-radius: 18px; font-weight: bold; font-size: 12px;")
+                self.logo_box.setStyleSheet(f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c_deep_blue}, stop:1 {c_light_blue}); color: white; border-radius: 6px; font-weight: bold; font-size: 13px;")
 
-            # Glowing New Session Button
-            self.new_chat_btn.setStyleSheet(f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {c_cyan}, stop:1 {c_magenta}); color: black; border-radius: 8px; font-size: 12px; font-weight: bold; letter-spacing: 1px; border: none; }} QPushButton:hover {{ opacity: 0.8; }}")
-
-            # Floating glassmorphic command palette
-            self.center_bar.setStyleSheet(f"QFrame {{ background-color: {c_glass}; border: 1px solid {c_cyan}; border-radius: 28px; }}")
-            self.search_bar.setStyleSheet(f"QLineEdit {{ background-color: transparent; color: {text_main}; font-size: 14px; border: none; padding: 0px; }}")
-            self.fast_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {c_cyan}; font-size: 11px; font-weight: bold; border: none; padding: 0 8px; letter-spacing: 1px; }} QPushButton:hover {{ color: white; }}")
-            self.send_btn.setStyleSheet(f"QPushButton {{ background-color: {c_cyan}; color: black; border-radius: 20px; font-size: 16px; border: none; }} QPushButton:hover {{ background-color: white; }}")
-
-            self.settings_btn.setStyleSheet(f"QPushButton {{ background-color: {c_glass}; color: {text_muted}; border-radius: 18px; border: 1px solid {border}; }} QPushButton:hover {{ background-color: #1F1F2E; color: {text_main}; border: 1px solid {c_cyan}; }}")
+            self.center_bar.setStyleSheet(f"QFrame {{ background-color: {bar_bg}; border: 1px solid {c_deep_blue}; border-radius: 14px; }}")
+            self.search_bar.setStyleSheet(f"QLineEdit {{ background-color: transparent; color: {text_main}; font-size: 13px; border: none; padding: 0px 4px; }}")
             
-            # Futuristic glowing scrollbar
-            self.scroll_area.setStyleSheet(f"""
-                QScrollArea {{ background-color: transparent; border: none; }}
-                QScrollBar:vertical {{ background: transparent; width: 4px; margin: 0px; }}
-                QScrollBar::handle:vertical {{ background: {c_cyan}; border-radius: 2px; }}
-                QScrollBar::handle:vertical:hover {{ background: {c_magenta}; }}
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            self.send_btn.setStyleSheet(f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c_lime}, stop:1 {c_green}); color: black; border-radius: 10px; font-size: 14px; border: none; }} QPushButton:hover {{ background: {c_lime}; }}")
+            self.plus_btn.setStyleSheet(f"QPushButton {{ background-color: #111; color: {c_light_blue}; border-radius: 9px; font-size: 20px; border: none; }} QPushButton:hover {{ background-color: #222; }}")
+            self.fast_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {c_teal}; font-size: 11px; font-weight: bold; border: none; padding: 0 4px; }} QPushButton:hover {{ color: {c_lime}; }}")
+
+            self.settings_btn.setStyleSheet(f"""
+                QPushButton {{ background-color: {settings_btn_bg}; color: {text_muted}; font-size: 14px; border: 1px solid {border}; border-radius: 8px; }}
+                QPushButton:hover {{ background-color: #111; color: {text_main}; border: 1px solid {c_deep_blue}; }}
             """)
+            self.update_frame.setStyleSheet(f"background-color: {settings_btn_bg}; border: 1px solid {border}; border-radius: 8px;")
+
+            self.chat_btn.setStyleSheet(f"QPushButton {{ background-color: {c_deep_blue}; color: {text_main}; border-radius: 6px; font-size: 12px; font-weight: bold; padding: 0 12px; }}")
+            self.work_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; border-radius: 6px; font-size: 12px; padding: 0 12px; }} QPushButton:hover {{ background-color: #111; color: {text_main}; }}")
+
+            for i, btn in enumerate(self.nav_buttons):
+                if i == 0:
+                    btn.setStyleSheet(f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {c_deep_blue}, stop:1 {c_light_blue}); color: {text_main}; font-size: 13px; text-align: left; padding: 7px 10px; border-radius: 7px; border: none; }}")
+                else:
+                    btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 13px; text-align: left; padding: 7px 10px; border-radius: 7px; border: none; }} QPushButton:hover {{ background-color: #111; color: {text_main}; }}")
+
+            for btn in self.history_buttons:
+                btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 12px; text-align: left; padding: 6px 8px; border-radius: 6px; border: none; }} QPushButton:hover {{ background-color: #111; color: {text_main}; }}")
 
         self.settings_panel.apply_theme(mode)
         self.canvas_panel.apply_theme(mode)
@@ -382,7 +593,8 @@ class HomeScreen(QWidget):
             self.show_chat()
 
     def show_settings(self):
-        if not self.settings_panel.isHidden(): return
+        if not self.settings_panel.isHidden():
+            return
         self.scroll_area.hide()
         self.center_bar.hide()
         self.welcome_label.hide()
@@ -391,8 +603,14 @@ class HomeScreen(QWidget):
         self.settings_panel.show() 
 
     def show_chat(self):
-        if self.settings_panel.isHidden(): return
+        if self.settings_panel.isHidden():
+            return
         self.settings_panel.hide() 
+        
+        active_bg = "#F3F4F6" if self.current_theme == "light" else "#3f48cc"
+        text_col = "#111827" if self.current_theme == "light" else "white"
+        self.chat_btn.setStyleSheet(f"QPushButton {{ background-color: {active_bg}; color: {text_col}; border-radius: 6px; font-size: 12px; font-weight: bold; padding: 0 12px; }}")
+
         if self.first_message_sent:
             self.scroll_area.show()
             self.center_bar.show()
@@ -404,6 +622,7 @@ class HomeScreen(QWidget):
     def clear_chat_history(self):
         self._clear_layout(self.chat_layout)
         self.first_message_sent = False
+        self.current_session_id = get_next_session_id() # Starts a clean, fresh session
         self.canvas_panel.hide()
         
         self.scroll_area.hide()
@@ -413,7 +632,7 @@ class HomeScreen(QWidget):
         self.show_chat()
 
     # ══════════════════════════════════════════════════════
-    #  ANIMATION & CHAT LOGIC
+    #  ANIMATION & CHAT LOGIC 
     # ══════════════════════════════════════════════════════
     def closeEvent(self, event):
         print("Shutting down Dex... Flushing AI from RAM.")
@@ -441,13 +660,13 @@ class HomeScreen(QWidget):
 
                 ww = self.welcome_label.width()
                 wh = self.welcome_label.height()
-                welcome_y = bar_y - wh - 20
+                welcome_y = bar_y - wh - 14
                 self.welcome_label.setGeometry((cw - ww) // 2, welcome_y, ww, wh)
                 self.welcome_label.raise_()
 
                 mw = self.mascot_label.width()
                 mh = self.mascot_label.height()
-                self.mascot_label.setGeometry((cw - mw) // 2, welcome_y - mh - 20, mw, mh)
+                self.mascot_label.setGeometry((cw - mw) // 2, welcome_y - mh - 10, mw, mh)
                 self.mascot_label.raise_()
 
     def animate_prompt_bar(self):
@@ -462,23 +681,29 @@ class HomeScreen(QWidget):
         end_rect = QRect(end_x, end_y, self.center_bar.width(), self.center_bar.height())
 
         self.anim = QPropertyAnimation(self.center_bar, b"geometry")
-        self.anim.setDuration(600)
+        self.anim.setDuration(500)
         self.anim.setStartValue(start_rect)
         self.anim.setEndValue(end_rect)
-        self.anim.setEasingCurve(QEasingCurve.OutExpo) # Snappier futuristic easing
+        self.anim.setEasingCurve(QEasingCurve.InOutQuad)
         self.anim.finished.connect(self._dock_prompt_bar)
         self.anim.start()
 
     def _dock_prompt_bar(self):
         self.scroll_area.show()
+        
         try:
             for i in reversed(range(self.content_layout.count())):
                 item = self.content_layout.itemAt(i)
                 widget = item.widget()
-                if widget is self.settings_panel or widget is self.scroll_area: continue
+                
+                if widget is self.settings_panel or widget is self.scroll_area:
+                    continue
+                
                 taken = self.content_layout.takeAt(i)
-                if taken.widget(): taken.widget().deleteLater()
-                elif taken.layout(): self._clear_layout(taken.layout())
+                if taken.widget():
+                    taken.widget().deleteLater()
+                elif taken.layout():
+                    self._clear_layout(taken.layout())
 
             dock_layout = QHBoxLayout()
             dock_layout.addStretch()
@@ -491,8 +716,10 @@ class HomeScreen(QWidget):
     def _clear_layout(self, layout):
         while layout.count():
             item = layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-            elif item.layout(): self._clear_layout(item.layout())
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())
 
     def _make_bubble(self, text: str, sender: str) -> QFrame:
         frame = QFrame()
@@ -500,27 +727,24 @@ class HomeScreen(QWidget):
         frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         frame_layout = QVBoxLayout(frame)
-        frame_layout.setContentsMargins(18, 14, 18, 14)
+        frame_layout.setContentsMargins(16, 10, 16, 10)
         frame_layout.setSpacing(10)
 
         if sender == "user":
             if self.current_theme == "light":
-                frame.setStyleSheet("QFrame { background-color: #F1F5F9; border: 1px solid #E2E8F0; border-radius: 16px; border-bottom-right-radius: 4px; }")
-                text_color = "#0F172A"
+                frame.setStyleSheet("QFrame { background-color: #E5E7EB; border-radius: 16px; color: #111827; }")
+                text_color = "#111827"
             else:
-                frame.setStyleSheet("QFrame { background-color: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 16px; border-bottom-right-radius: 4px; }")
-                text_color = "#00F0FF"
+                frame.setStyleSheet("QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3f48cc, stop:1 #41a8cc); border-radius: 16px; color: white; }")
+                text_color = "white"
         elif sender == "thinking":
-            color = "#94A3B8" if self.current_theme == "light" else "#FF003C"
-            frame.setStyleSheet(f"QFrame {{ background-color: transparent; border: none; }}")
+            color = "#6B7280" if self.current_theme == "light" else "#41ccbc"
+            frame.setStyleSheet(f"QFrame {{ background-color: transparent; color: {color}; font-style: italic; }}")
             text_color = color
         else:
-            if self.current_theme == "light":
-                frame.setStyleSheet("QFrame { background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 16px; border-bottom-left-radius: 4px; }")
-                text_color = "#0F172A"
-            else:
-                frame.setStyleSheet("QFrame { background-color: rgba(255, 255, 255, 0.02); border: 1px solid #27272A; border-radius: 16px; border-bottom-left-radius: 4px; }")
-                text_color = "#E4E4E7"
+            color = "#111827" if self.current_theme == "light" else "#E0E0E0"
+            frame.setStyleSheet(f"QFrame {{ background-color: transparent; color: {color}; }}")
+            text_color = color
 
         if sender in ["user", "thinking"] or "```" not in text:
             label = QLabel(text)
@@ -544,6 +768,7 @@ class HomeScreen(QWidget):
                     lines = part.split('\n', 1)
                     lang = lines[0].strip() if len(lines) > 0 else ""
                     code = lines[1].strip() if len(lines) > 1 else ""
+                    
                     if code:
                         code_box = CodeBlockWidget(lang, code)
                         frame_layout.addWidget(code_box)
@@ -560,7 +785,7 @@ class HomeScreen(QWidget):
         row_layout.setSpacing(0)
 
         center_column = QWidget()
-        center_column.setMaximumWidth(800) 
+        center_column.setMaximumWidth(760) 
         center_column.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         
         center_layout = QHBoxLayout(center_column)
@@ -585,15 +810,21 @@ class HomeScreen(QWidget):
         return bubble
 
     def switch_model(self, title: str, tag: str):
-        if self.current_model_tag == tag: return
+        if self.current_model_tag == tag:
+            return
+
         old_tag = self.current_model_tag
         self.current_model_tag = tag
-        self.fast_btn.setText(f"{title.split(' ')[0].upper()} ∨")
+        
+        short_name = title.split(" ")[0]
+        self.fast_btn.setText(f"{short_name} ∨")
+        
         stop_model(old_tag)
 
     def send_prompt(self):
         prompt = self.search_bar.text().strip()
-        if not prompt or self.worker is not None: return
+        if not prompt or self.worker is not None:
+            return
 
         self.search_bar.clear()
         self.search_bar.setEnabled(False)
@@ -603,9 +834,10 @@ class HomeScreen(QWidget):
             self.animate_prompt_bar()
 
         self.add_message(prompt, sender="user")
-        self.thinking_bubble = self.add_message("PROCESSING REQUEST...", sender="thinking")
+        self.thinking_bubble = self.add_message("thinking…", sender="thinking")
 
-        self.worker = MistWorker(prompt, self.current_model_tag)
+        # Start 7K Engine with Memory Lock
+        self.worker = Worker7K(prompt, self.current_model_tag, self.current_session_id)
         self.worker.finished.connect(self._on_response)
         self.worker.start()
 
@@ -614,25 +846,35 @@ class HomeScreen(QWidget):
             center_column = self.thinking_bubble.parentWidget()
             if center_column:
                 row_widget = center_column.parentWidget()
-                if row_widget: row_widget.deleteLater()
+                if row_widget:
+                    row_widget.deleteLater()
             self.thinking_bubble = None
 
-        canvas_pattern = r'/\\/\\tool="canvas"\s+head="(.*?)"\s+value="(.*?)"'
-        canvas_matches = re.findall(canvas_pattern, response, re.DOTALL)
+        # 1. Update Canvas panel if requested
+        canvas_pattern = r'[/\\]{2,4}tool=["\']canvas["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
+        canvas_matches = re.findall(canvas_pattern, response, re.DOTALL | re.IGNORECASE)
         
         if canvas_matches:
             head, code = canvas_matches[-1]
             self.canvas_panel.update_content(head, code)
             self.canvas_panel.show()
 
-        msg_pattern = r'/\\/\\tool="message"\s+value="(.*?)"'
-        messages = re.findall(msg_pattern, response, re.DOTALL)
+        # 2. Parse direct UI text and filter raw commands
+        msg_pattern = r'[/\\]{2,4}tool=["\'](?:message|msg|reply)["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
+        msg_matches = re.findall(msg_pattern, response, re.DOTALL | re.IGNORECASE)
         
-        if messages: display_text = "\n\n".join(messages)
-        elif response.strip(): display_text = f"⚠️ [SYSTEM OUTPUT]: {response.strip()}"
-        else: display_text = "✅ PROCESS EXECUTED."
+        if msg_matches:
+            display_text = "\n\n".join([m[1].replace('\\"', '"').replace('\\\\', '\\') for m in msg_matches])
+        elif response.strip():
+            clean_text = re.sub(r'[/\\]{2,4}tool=["\'][^"\']+["\'][^\n]*', '', response).strip()
+            display_text = clean_text if clean_text else "✅ Action executed successfully."
+        else:
+            display_text = "✅ Action executed successfully."
 
         self.add_message(display_text, sender="mist")
+        
+        # Refresh sidebar to grab any new session headers generated by the AI
+        self.refresh_history_sidebar()
         
         self.search_bar.setEnabled(True)
         self.search_bar.setFocus()
