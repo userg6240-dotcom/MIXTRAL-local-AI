@@ -45,7 +45,7 @@ class ModelMenu(QMenu):
         self.add_rich_item("CodeGemma", "Math and code with language personality.", "Mxrl_codegemma")
         self.add_rich_item("Llama3.1", "Very fast and capable.", "Mxrl_llama3.1")
         self.add_rich_item("Qwen 2.5 Mini", "Extremely low RAM, blazing fast.", "Mxrl_qwen_mini")
-        self.add_rich_item("AutoAgent V4", "An Agent for autonomous tasks.", "AutoAgent-V5-Test")
+        self.add_rich_item("7K", "An Agent for autonomous tasks.", "7K-V2")
         self.add_rich_item("AutoAgent-Offline V2", "An Agent for autonomous tasks just offline.", "AutoAgent-Test-V4")
         
         self.addSeparator()
@@ -78,7 +78,7 @@ class ModelMenu(QMenu):
         self.addAction(action)
 
     def trigger_change(self, title, tag):
-        # 🌟 If the safety lock is active, completely ignore the accidental bounce click.
+        # 🌟 If the safety lock is active, completely ignore the accidental bounce click
         if self.click_locked:
             return
             
