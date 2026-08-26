@@ -2,12 +2,14 @@ import os
 import re
 import sys
 import time
+import json
 import shutil
 import subprocess
 import requests
 import webbrowser
 import winreg
 import ctypes
+import urllib.parse
 from datetime import datetime
 
 # ─────────────────────────────────────────────────────────────
@@ -91,7 +93,8 @@ TYPING_TOOLS = ["type", "type-into-active-window", "type-text", "write-text", "u
 MESSAGE_TOOLS = ["message", "msg", "reply"]
 
 CHAT_LOG_FILE = "Chat.txt"
-ACTIVE_SESSION_ID = None  # 🌟 NEW: Set to None to enable Memory Lock
+MODEL_CONFIG_FILE = "model_config.json"
+ACTIVE_SESSION_ID = None
 
 def get_next_session_id() -> int:
     """Reads Chat.txt to find the highest session ID and returns the next available."""
@@ -114,11 +117,18 @@ def log_chat_header(session_id: int, title: str):
         f.write(entry)
 
 def log_chat_message(session_id: int, role: str, message: str):
-    """Logs a message to Chat.txt"""
-    clean_msg = message.replace('\n', ' \\n ')
-    entry = f"{session_id}>>{role}: \"{clean_msg}\"\n"
+    """Logs a message to Chat.txt using JSON encoding."""
+    entry = f"{session_id}>>{role}: {json.dumps(message, ensure_ascii=False)}\n"
     with open(CHAT_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(entry)
+
+def _decode_logged_message(raw: str) -> str:
+    """Decodes a message body written by log_chat_message."""
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw.strip('"').replace(' \\n ', '\n')
 
 def get_recent_messages(session_id: int, limit: int = 8) -> list:
     """Parses Chat.txt into a native Ollama message history array."""
@@ -133,19 +143,18 @@ def get_recent_messages(session_id: int, limit: int = 8) -> list:
     
     for line in lines:
         if line.startswith(prefix):
-            content_str = line[len(prefix):].strip()
+            content_str = line[len(prefix):].rstrip("\n")
             
             if content_str.startswith("User:"):
-                msg = content_str[5:].strip().strip('"').replace(' \\n ', '\n')
+                msg = _decode_logged_message(content_str[5:])
                 messages.append({"role": "user", "content": msg})
                 
             elif content_str.startswith("AI:"):
-                msg = content_str[3:].strip().strip('"').replace(' \\n ', '\n')
+                msg = _decode_logged_message(content_str[3:])
                 messages.append({"role": "assistant", "content": msg})
                 
     return messages[-limit:]
 
-# 🌟 NEW: HISTORY PARSERS FOR UI SIDEBAR
 def get_all_sessions() -> list:
     """Reads Chat.txt and returns all recorded sessions (supports legacy headers)."""
     if not os.path.exists(CHAT_LOG_FILE):
@@ -153,8 +162,7 @@ def get_all_sessions() -> list:
     sessions = []
     with open(CHAT_LOG_FILE, "r", encoding="utf-8") as f:
         for line in f:
-            # Matches both new format "1>Title@Date" AND old format "1>Title"
-            match = re.match(r'^(\d+)>([^@\n]+)(?:@(.*))?$', line.strip())
+            match = re.match(r'^(\d+)>(?!>)([^@\n]+)(?:@(.*))?$', line.strip())
             if match:
                 sess_id = int(match.group(1))
                 title = match.group(2).strip() or f"Session {sess_id}"
@@ -166,6 +174,45 @@ def get_all_sessions() -> list:
                 })
     return sessions
 
+def rename_session(session_id: int, new_title: str):
+    """Updates the title of a specific session in Chat.txt."""
+    if not os.path.exists(CHAT_LOG_FILE):
+        return
+    with open(CHAT_LOG_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    
+    updated_lines = []
+    prefix = f"{session_id}>"
+    for line in lines:
+        # Match session header like "1>Old Title@24/08/2026/\10:30:00"
+        if line.startswith(prefix) and not line.startswith(f"{session_id}>>"):
+            parts = line.strip().split("@", 1)
+            timestamp = f"@{parts[1]}" if len(parts) > 1 else ""
+            updated_lines.append(f"{session_id}>{new_title.strip()}{timestamp}\n")
+        else:
+            updated_lines.append(line)
+            
+    with open(CHAT_LOG_FILE, "w", encoding="utf-8") as f:
+        f.writelines(updated_lines)
+
+def delete_session(session_id: int):
+    """Deletes a session header and all associated messages from Chat.txt."""
+    if not os.path.exists(CHAT_LOG_FILE):
+        return
+    with open(CHAT_LOG_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        
+    header_prefix = f"{session_id}>"
+    msg_prefix = f"{session_id}>>"
+    
+    updated_lines = [
+        line for line in lines
+        if not (line.startswith(header_prefix) or line.startswith(msg_prefix))
+    ]
+    
+    with open(CHAT_LOG_FILE, "w", encoding="utf-8") as f:
+        f.writelines(updated_lines)
+
 def get_session_history(session_id: int) -> list:
     """Returns all messages for a specific session as [(sender, text), ...]."""
     if not os.path.exists(CHAT_LOG_FILE):
@@ -175,14 +222,35 @@ def get_session_history(session_id: int) -> list:
     with open(CHAT_LOG_FILE, "r", encoding="utf-8") as f:
         for line in f:
             if line.startswith(prefix):
-                content_str = line[len(prefix):].strip()
+                content_str = line[len(prefix):].rstrip("\n")
                 if content_str.startswith("User:"):
-                    msg = content_str[5:].strip().strip('"').replace(' \\n ', '\n')
+                    msg = _decode_logged_message(content_str[5:])
                     history.append(("user", msg))
                 elif content_str.startswith("AI:"):
-                    msg = content_str[3:].strip().strip('"').replace(' \\n ', '\n')
+                    msg = _decode_logged_message(content_str[3:])
                     history.append(("mist", msg))
     return history
+
+def save_last_model(tag: str, title: str):
+    """Persists the most recently selected model so it survives app restarts."""
+    try:
+        with open(MODEL_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({"tag": tag, "title": title}, f)
+    except Exception as e:
+        print(f"[⚠️] Could not save last model: {e}")
+
+def load_last_model() -> dict | None:
+    """Returns {'tag': ..., 'title': ...} for the last used model, or None."""
+    if not os.path.exists(MODEL_CONFIG_FILE):
+        return None
+    try:
+        with open(MODEL_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and data.get("tag"):
+                return data
+    except Exception as e:
+        print(f"[⚠️] Could not load last model: {e}")
+    return None
 
 # ─────────────────────────────────────────────────────────────
 # 3. DETACHED BROWSER & SYSTEM HELPERS
@@ -451,9 +519,6 @@ def execute_protocol(ai_text: str):
     results = []
     for tool, head, value in commands:
         clean_val = value.replace('\\"', '"').replace('\\\\', '\\').strip()
-        
-        if tool.lower() in ["web_open", "app_launch"] or "http" in clean_val.lower():
-            clean_val = "".join(clean_val.split())
 
         res = execute_tool(tool, head, clean_val)
         results.append((tool, res))
@@ -478,13 +543,52 @@ def execute_protocol(ai_text: str):
     return results
 
 # ─────────────────────────────────────────────────────────────
-# 6. EXECUTION BRIDGES & UI CONNECTORS
+# 6. THE MASE PIPELINE (SEARCH & EVALUATION)
 # ─────────────────────────────────────────────────────────────
-def query_mist(prompt: str, model_name: str = "ultron", session_id: int = None):
-    """Entry point for the UI: Executes macros and maintains active session memory."""
+def mase_evaluate(prompt: str) -> str:
+    """Asks the MASE model if a web search is needed."""
+    payload = {
+        "model": "MASE",
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.0} # Zero temp for strict keyword generation
+    }
+    try:
+        res = requests.post(OLLAMA_API, json=payload, timeout=10).json()
+        response = res.get("response", "").strip()
+        if "NULL?" in response or not response:
+            return "NULL?"
+        return response
+    except Exception as e:
+        print(f"[⚠️] MASE Evaluation Error: {e}")
+        return "NULL?"
+
+def perform_web_search(query: str) -> str:
+    """Built-in lightweight web scraper using DuckDuckGo HTML."""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        safe_query = urllib.parse.quote(query)
+        url = f"https://html.duckduckgo.com/html/?q={safe_query}"
+        res = requests.get(url, headers=headers, timeout=5)
+        
+        # Scrape snippets from search results
+        snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', res.text, re.IGNORECASE | re.DOTALL)
+        if snippets:
+            # Clean HTML tags and join top 3 results
+            clean_snippets = [re.sub(r'<[^>]+>', '', s).strip() for s in snippets[:3]]
+            return " | ".join(clean_snippets).replace('"', "'")
+        return "No relevant search results found."
+    except Exception as e:
+        print(f"[⚠️] Web Search Error: {e}")
+        return "Search failed."
+
+# ─────────────────────────────────────────────────────────────
+# 7. EXECUTION BRIDGES & UI CONNECTORS
+# ─────────────────────────────────────────────────────────────
+def query_mist(prompt: str, model_name: str = "7K", session_id: int = None):
+    """Entry point for the UI: Intercepts via MASE, fetches context, and calls 7K."""
     global ACTIVE_SESSION_ID
     
-    # 🌟 NEW: Lock onto the active session instead of generating a new one every turn
     if session_id is not None:
         ACTIVE_SESSION_ID = session_id
     elif ACTIVE_SESSION_ID is None:
@@ -492,27 +596,43 @@ def query_mist(prompt: str, model_name: str = "ultron", session_id: int = None):
         
     session_id = ACTIVE_SESSION_ID
     
-    # 1. Grab native memory history for THIS session
+    # 1. THE MASE INTERCEPT
+    print(f"\n[🧠] MASE evaluating prompt...")
+    mase_query = mase_evaluate(prompt)
+    search_data = "NULL?"
+    
+    if mase_query != "NULL?":
+        print(f"[🔍] MASE Triggered Search: {mase_query}")
+        search_data = perform_web_search(mase_query)
+        print(f"[✅] Search Results Acquired.")
+    else:
+        print(f"[⚡] MASE Bypassed (Local Execution).")
+
+    # 2. Format payload for 7K
+    formatted_prompt = f'search="{search_data}" query="{prompt}"'
+    
     messages = get_recent_messages(session_id, limit=8)
     
-    current_prompt = prompt
-    if not messages:
-        current_prompt = f"{prompt}\n\n[SYSTEM] NEW CHAT. Output generate-head first."
-        
-    messages.append({"role": "user", "content": current_prompt})
+    # Log the CLEAN prompt to the UI history so the chat looks normal
     log_chat_message(session_id, "User", prompt)
+    
+    if not messages:
+        formatted_prompt += "\n\n[SYSTEM] NEW CHAT. Output generate-head first."
+        
+    messages.append({"role": "user", "content": formatted_prompt})
     
     payload = {
         "model": model_name,
         "messages": messages,
         "stream": False,
         "options": {
-            "num_ctx": 8192, 
+            "num_ctx": 8192,
+            "num_predict": 2048,
             "temperature": 0.1
         }
     }
 
-    print(f"\n[DIAGNOSTIC] Session {session_id} Payload to AI: {messages}\n")
+    print(f"\n[DIAGNOSTIC] Session {session_id} Final Payload to {model_name}:\n{formatted_prompt}\n")
 
     try:
         res = requests.post(OLLAMA_CHAT_API, json=payload, timeout=None).json()
@@ -522,28 +642,20 @@ def query_mist(prompt: str, model_name: str = "ultron", session_id: int = None):
         
     log_chat_message(session_id, "AI", ai_reply)
     
-    # 2. Execute the background OS macros
-    tool_results = execute_protocol(ai_reply)
+    # Execute the background OS macros
+    execute_protocol(ai_reply)
     
-    # 3. UI Filter: Extract ONLY the message for your chat bubble
-    ui_display_text = ""
-    for tool_name, tool_output in tool_results:
-        if tool_name in MESSAGE_TOOLS:
-            ui_display_text += tool_output + "\n"
-            
-    if not ui_display_text.strip():
-        ui_display_text = "Task executed successfully."
-        
-    return ui_display_text.strip()
+    # Return RAW AI text so home.py can parse canvas and messages itself
+    return ai_reply
 
-def run_macro_session(initial_prompt: str, model_name: str = "ultron", session_id: int = None):
+def run_macro_session(initial_prompt: str, model_name: str = "7K", session_id: int = None):
     """Terminal/CLI fallback testing loop."""
     print(f"\n[🚀 STARTING MACRO TEST]")
     result = query_mist(initial_prompt, model_name, session_id)
     print(f"\n[UI OUTPUT]: {result}")
     return result
 
-def stop_model(model_name: str = "ultron"):
+def stop_model(model_name: str = "7K"):
     """Flushes model weights from VRAM."""
     print(f"[🛑] Flushing '{model_name}' from VRAM...")
     try:
@@ -552,4 +664,4 @@ def stop_model(model_name: str = "ultron"):
         print(f"[⚠️] Could not flush VRAM: {e}")
 
 if __name__ == "__main__":
-    run_macro_session("Remember the number 42", session_id=1)
+    run_macro_session("What is the current price of Bitcoin?", session_id=1)
