@@ -1,17 +1,22 @@
 import sys
 import os
 import re
+import random
 import subprocess
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QScrollArea, QApplication,
-    QSizePolicy, QSpacerItem, QTextEdit, QMainWindow, QSplitter
+    QSizePolicy, QSpacerItem, QTextEdit, QMainWindow, QSplitter,
+    QMenu, QInputDialog
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QRect, QEasingCurve, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QRect, QEasingCurve, QTimer, QPoint
 from PyQt5.QtGui import QColor, QFontDatabase, QFont, QPixmap, QCursor
 
-# Import everything needed from our updated port.py
-from port import query_mist, stop_model, get_all_sessions, get_session_history, get_next_session_id
+from port import (
+    query_mist, stop_model, get_all_sessions, get_session_history,
+    get_next_session_id, save_last_model, load_last_model,
+    rename_session, delete_session
+)
 from settings import SettingsPanel
 from model_menu import ModelMenu
 from canvas import CanvasPanel
@@ -21,9 +26,10 @@ from canvas import CanvasPanel
 # ══════════════════════════════════════════════════════
 class CodeBlockWidget(QFrame):
     """A custom mini-editor to display code with a copy button."""
-    def __init__(self, language: str, code: str):
+    def __init__(self, language: str, code: str, mono_font: str = "Consolas"):
         super().__init__()
         self.code_text = code
+        self.mono_font = mono_font
         
         self.setStyleSheet("""
             QFrame {
@@ -59,15 +65,15 @@ class CodeBlockWidget(QFrame):
         self.text_area = QTextEdit()
         self.text_area.setPlainText(code)
         self.text_area.setReadOnly(True)
-        self.text_area.setStyleSheet("""
-            QTextEdit {
+        self.text_area.setStyleSheet(f"""
+            QTextEdit {{
                 background-color: transparent;
                 color: #D4D4D4;
-                font-family: Consolas, Monaco, monospace;
+                font-family: "{self.mono_font}", Consolas, monospace;
                 font-size: 13px;
                 border: none;
                 padding: 10px;
-            }
+            }}
         """)
         
         line_count = len(code.split('\n'))
@@ -84,7 +90,7 @@ class CodeBlockWidget(QFrame):
 
 
 # ══════════════════════════════════════════════════════
-#  BACKGROUND WORKER THREAD (7K Engine)
+#  BACKGROUND WORKER THREAD
 # ══════════════════════════════════════════════════════
 class Worker7K(QThread):
     finished = pyqtSignal(str)
@@ -93,7 +99,7 @@ class Worker7K(QThread):
         super().__init__()
         self.prompt = prompt
         self.model_name = model_name
-        self.session_id = session_id # Lock the memory to the active session
+        self.session_id = session_id
 
     def run(self):
         response = query_mist(self.prompt, self.model_name, self.session_id)
@@ -107,31 +113,59 @@ class HomeScreen(QWidget):
     def __init__(self, username="guest user"):
         super().__init__()
         
-        if isinstance(username, list):
-            self.current_user = str(username)
-        else:
-            self.current_user = str(username)
+        self.current_user = str(username) if not isinstance(username, list) else str(username[0])
             
         self.setWindowTitle("Dex Home")
         self.worker = None
         self.first_message_sent = False
         self.current_theme = "light"
         self.current_model_tag = "llama3.1" 
-        self.current_session_id = None # Tracks the active chat memory
+        self.current_session_id = None
 
         self.nav_buttons = []
         self.history_buttons = []
 
+        # ─── 1. BASE APP FONTS ───
         font_path = "assets/GoogleSans-VariableFont_GRAD,opsz,wght.ttf"
         font_id = QFontDatabase.addApplicationFont(font_path)
-        
-        if font_id == -1:
-            self.font_family = "Segoe UI" 
-        else:
-            self.font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+        self.font_family = QFontDatabase.applicationFontFamilies(font_id)[0] if font_id != -1 else "Segoe UI"
+
+        mono_path = "assets/GoogleSansCode-VariableFont_MONO,wght.ttf"
+        mono_id = QFontDatabase.addApplicationFont(mono_path)
+        self.mono_family = QFontDatabase.applicationFontFamilies(mono_id)[0] if mono_id != -1 else "Consolas"
 
         app_font = QFont(self.font_family, 11)
         QApplication.setFont(app_font)
+
+        # ─── 2. SPLASH SCREEN FONTS & PHRASES ───
+        splash_font_files = [
+            "assets/SourGummy-VariableFont_wdth,wght.ttf",
+            "assets/Outfit-VariableFont_wght.ttf",
+            "assets/Michroma-Regular.ttf",
+            "assets/Honk-Regular-VariableFont_MORF,SHLN.ttf"
+        ]
+        self.splash_fonts = []
+        for f_path in splash_font_files:
+            f_id = QFontDatabase.addApplicationFont(f_path)
+            if f_id != -1:
+                fams = QFontDatabase.applicationFontFamilies(f_id)
+                if fams:
+                    self.splash_fonts.append(fams[0])
+        if not self.splash_fonts:
+            self.splash_fonts = [self.font_family]
+
+        self.splash_phrases = [
+            "Where should we start?",
+            "Any new ideas to explore?",
+            "What are we building today?",
+            "Ready when you are.",
+            "It's a late-night jam session.",
+            "Got a tough problem to solve?",
+            "Let's make some magic.",
+            "What's on your mind?",
+            "Time to build the future.",
+            "Explore a brand new thought."
+        ]
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -230,15 +264,13 @@ class HomeScreen(QWidget):
         side_layout.addWidget(self.chats_lbl)
         side_layout.addSpacing(4)
 
-        # 🌟 DYNAMIC HISTORY CONTAINER
+        # Dynamic History Container
         self.history_container = QWidget()
         self.history_container.setStyleSheet("background: transparent;")
         self.history_layout = QVBoxLayout(self.history_container)
         self.history_layout.setContentsMargins(0, 0, 0, 0)
         self.history_layout.setSpacing(2)
         side_layout.addWidget(self.history_container)
-        
-       # self.refresh_history_sidebar()
 
         side_layout.addStretch()
 
@@ -336,9 +368,9 @@ class HomeScreen(QWidget):
             self.mascot_label.setStyleSheet("font-size: 48px; background: transparent;")
         self.mascot_label.adjustSize()
 
-        self.welcome_label = QLabel(f"Welcome, {self.current_user}", self.content)
-        self.welcome_label.setFont(QFont(self.font_family, 26, QFont.Bold))
+        self.welcome_label = QLabel(self.content)
         self.welcome_label.setAlignment(Qt.AlignCenter)
+        self.randomize_welcome_phrase()
 
         self.center_bar = QFrame(self.content)
         self.center_bar.setMaximumWidth(680)
@@ -359,6 +391,13 @@ class HomeScreen(QWidget):
         self.model_dropdown = ModelMenu(self)
         self.model_dropdown.model_changed.connect(self.switch_model)
         self.fast_btn.setMenu(self.model_dropdown)
+
+        last_model = load_last_model()
+        if last_model:
+            self.current_model_tag = last_model.get("tag", self.current_model_tag)
+            last_title = last_model.get("title") or "Dex"
+            short_name = last_title.split(" ")[0] if last_title else "Dex"
+            self.fast_btn.setText(f"{short_name} ∨")
 
         self.send_btn = QPushButton("🎤")
         self.send_btn.setFixedSize(34, 34)
@@ -394,36 +433,92 @@ class HomeScreen(QWidget):
         main_layout.addWidget(self.splitter)
 
         self.apply_theme("light")
+        self.refresh_history_sidebar()
 
     # ══════════════════════════════════════════════════════
-    #  DYNAMIC HISTORY & SESSION ENGINE
+    #  SPLASH SCREEN RANDOMIZER
+    # ══════════════════════════════════════════════════════
+    def randomize_welcome_phrase(self):
+        """Picks a random phrase and font for the welcome splash screen."""
+        phrase = random.choice(self.splash_phrases)
+        chosen_font = random.choice(self.splash_fonts)
+        self.welcome_label.setText(phrase)
+        self.welcome_label.setFont(QFont(chosen_font, 24, QFont.Bold))
+        self.welcome_label.adjustSize()
+
+    # ══════════════════════════════════════════════════════
+    #  DYNAMIC HISTORY & 3-DOT MANAGEMENT MENU
     # ══════════════════════════════════════════════════════
     def refresh_history_sidebar(self):
-        """Clears and re-populates the sidebar buttons from Chat.txt."""
+        """Clears and re-populates the sidebar buttons with 3-dot management menus."""
         self._clear_layout(self.history_layout)
         self.history_buttons.clear()
 
         sessions = get_all_sessions()
         
-        # Show most recent sessions first
         for sess in reversed(sessions):
             sess_id = sess["id"]
             title = sess["title"]
+            display_title = title if len(title) <= 18 else title[:15] + "..."
             
-            # Truncate long titles for sidebar width
-            display_title = title if len(title) <= 22 else title[:19] + "..."
+            row_widget = QWidget()
+            row_widget.setStyleSheet("background: transparent;")
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(2)
             
             btn = QPushButton(display_title)
             btn.setCursor(QCursor(Qt.PointingHandCursor))
             btn.setToolTip(f"{title} ({sess['timestamp']})")
-            
-            # Lambda trick to capture loop variable correctly
             btn.clicked.connect(lambda checked, s_id=sess_id: self.load_session(s_id))
             
+            dots_btn = QPushButton("⋮")
+            dots_btn.setFixedSize(22, 22)
+            dots_btn.setCursor(QCursor(Qt.PointingHandCursor))
+            dots_btn.setStyleSheet("""
+                QPushButton { background: transparent; color: #707070; font-weight: bold; border: none; border-radius: 4px; }
+                QPushButton:hover { background-color: rgba(120, 120, 120, 0.2); color: white; }
+            """)
+            
+            def show_options_menu(pos, s_id=sess_id, current_title=title, sender_btn=dots_btn):
+                menu = QMenu(self)
+                menu.setStyleSheet("""
+                    QMenu { background-color: #1A1A1A; color: white; border: 1px solid #333333; border-radius: 8px; padding: 4px; }
+                    QMenu::item { padding: 6px 14px; border-radius: 4px; font-size: 12px; }
+                    QMenu::item:selected { background-color: #3f48cc; color: white; }
+                """)
+                edit_action = menu.addAction("✏️ Edit Name")
+                delete_action = menu.addAction("🗑️ Delete")
+                
+                action = menu.exec_(sender_btn.mapToGlobal(pos))
+                if action == edit_action:
+                    self.prompt_rename_session(s_id, current_title)
+                elif action == delete_action:
+                    self.prompt_delete_session(s_id)
+
+            dots_btn.clicked.connect(lambda _, d_btn=dots_btn, s_id=sess_id, t=title: show_options_menu(QPoint(0, 22), s_id, t, d_btn))
+            
+            row_layout.addWidget(btn, 1)
+            row_layout.addWidget(dots_btn, 0)
+            
             self.history_buttons.append(btn)
-            self.history_layout.addWidget(btn)
+            self.history_layout.addWidget(row_widget)
 
         self.apply_theme(self.current_theme)
+
+    def prompt_rename_session(self, session_id: int, old_title: str):
+        """Prompts user for a new chat name and updates Chat.txt."""
+        new_title, ok = QInputDialog.getText(self, "Edit Chat Name", "Enter new chat title:", text=old_title)
+        if ok and new_title.strip():
+            rename_session(session_id, new_title.strip())
+            self.refresh_history_sidebar()
+
+    def prompt_delete_session(self, session_id: int):
+        """Deletes session data and refreshes UI."""
+        delete_session(session_id)
+        self.refresh_history_sidebar()
+        if self.current_session_id == session_id:
+            self.clear_chat_history()
 
     def load_session(self, session_id: int):
         """Loads all conversation messages for the selected session into the chat view."""
@@ -440,7 +535,6 @@ class HomeScreen(QWidget):
 
         for sender, raw_text in history:
             if sender == "mist":
-                # Use the bulletproof tool extraction matching port.py
                 pattern = r'[/\\]{2,4}tool=["\']([^"\']+)["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
                 commands = re.findall(pattern, raw_text, re.DOTALL | re.IGNORECASE)
                 
@@ -453,7 +547,6 @@ class HomeScreen(QWidget):
                 if messages:
                     display_text = "\n\n".join(messages)
                 else:
-                    # Strip out tools to see if there's text left, otherwise fallback
                     clean_text = re.sub(pattern, '', raw_text).strip()
                     display_text = clean_text if clean_text else "✅ Task completed."
             else:
@@ -521,7 +614,7 @@ class HomeScreen(QWidget):
             for btn in self.history_buttons:
                 btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {text_muted}; font-size: 12px; text-align: left; padding: 6px 8px; border-radius: 6px; border: none; }} QPushButton:hover {{ background-color: {btn_active_bg}; color: {text_main}; }}")
 
-        else: # 🌟 DARK THEME
+        else: # Dark Theme
             bg = "#000000"
             side_bg = "#050505"
             text_main = "white"
@@ -534,7 +627,6 @@ class HomeScreen(QWidget):
             c_teal = "#41ccbc"
             c_green = "#42cc5b"
             c_lime = "#c8ff50"
-            
             settings_btn_bg = "#0a0a0a"
             
             self.settings_panel.btn_dark.setStyleSheet(f"QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c_teal}, stop:1 {c_green}); color: black; border-radius: 8px; font-weight: bold; }}")
@@ -622,9 +714,10 @@ class HomeScreen(QWidget):
     def clear_chat_history(self):
         self._clear_layout(self.chat_layout)
         self.first_message_sent = False
-        self.current_session_id = get_next_session_id() # Starts a clean, fresh session
+        self.current_session_id = get_next_session_id()
         self.canvas_panel.hide()
         
+        self.randomize_welcome_phrase()
         self.scroll_area.hide()
         self.center_bar.setGeometry((self.content.width() - self.center_bar.width()) // 2, 
                                     (self.content.height() - self.center_bar.height()) // 2 + 20, 
@@ -696,7 +789,7 @@ class HomeScreen(QWidget):
                 item = self.content_layout.itemAt(i)
                 widget = item.widget()
                 
-                if widget is self.settings_panel or widget is self.scroll_area:
+                if widget in [self.settings_panel, self.scroll_area, self.center_bar]:
                     continue
                 
                 taken = self.content_layout.takeAt(i)
@@ -717,7 +810,9 @@ class HomeScreen(QWidget):
         while layout.count():
             item = layout.takeAt(0)
             if item.widget():
-                item.widget().deleteLater()
+                w = item.widget()
+                if w not in [self.center_bar, self.settings_panel, self.scroll_area, self.canvas_panel]:
+                    w.deleteLater()
             elif item.layout():
                 self._clear_layout(item.layout())
 
@@ -770,7 +865,7 @@ class HomeScreen(QWidget):
                     code = lines[1].strip() if len(lines) > 1 else ""
                     
                     if code:
-                        code_box = CodeBlockWidget(lang, code)
+                        code_box = CodeBlockWidget(lang, code, self.mono_family)
                         frame_layout.addWidget(code_box)
 
         return frame
@@ -818,7 +913,8 @@ class HomeScreen(QWidget):
         
         short_name = title.split(" ")[0]
         self.fast_btn.setText(f"{short_name} ∨")
-        
+
+        save_last_model(tag, title)
         stop_model(old_tag)
 
     def send_prompt(self):
@@ -836,7 +932,6 @@ class HomeScreen(QWidget):
         self.add_message(prompt, sender="user")
         self.thinking_bubble = self.add_message("thinking…", sender="thinking")
 
-        # Start 7K Engine with Memory Lock
         self.worker = Worker7K(prompt, self.current_model_tag, self.current_session_id)
         self.worker.finished.connect(self._on_response)
         self.worker.start()
@@ -850,30 +945,30 @@ class HomeScreen(QWidget):
                     row_widget.deleteLater()
             self.thinking_bubble = None
 
-        # 1. Update Canvas panel if requested
-        canvas_pattern = r'[/\\]{2,4}tool=["\']canvas["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
-        canvas_matches = re.findall(canvas_pattern, response, re.DOTALL | re.IGNORECASE)
-        
-        if canvas_matches:
-            head, code = canvas_matches[-1]
-            self.canvas_panel.update_content(head, code)
-            self.canvas_panel.show()
+        pattern = r'[/\\]{2,4}tool=["\']([^"\']+)["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
+        commands = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
 
-        # 2. Parse direct UI text and filter raw commands
-        msg_pattern = r'[/\\]{2,4}tool=["\'](?:message|msg|reply)["\'](?:\s+head=["\']([^"\']*)["\'])?\s+value=["\']((?:[^"\'\\]|\\.)*)["\']'
-        msg_matches = re.findall(msg_pattern, response, re.DOTALL | re.IGNORECASE)
-        
-        if msg_matches:
-            display_text = "\n\n".join([m[1].replace('\\"', '"').replace('\\\\', '\\') for m in msg_matches])
-        elif response.strip():
-            clean_text = re.sub(r'[/\\]{2,4}tool=["\'][^"\']+["\'][^\n]*', '', response).strip()
-            display_text = clean_text if clean_text else "✅ Action executed successfully."
+        messages = []
+        for t_name, t_head, t_val in commands:
+            clean_val = t_val.replace('\\"', '"').replace('\\\\', '\\').strip()
+
+            if t_name.lower() == "canvas":
+                self.canvas_panel.update_content(t_head, clean_val)
+                self.canvas_panel.show()
+                sizes = self.splitter.sizes()
+                if sizes[1] == 0:
+                    self.splitter.setSizes([max(1, sizes[0] - 450), 450])
+
+            elif t_name.lower() in ["message", "msg", "reply"]:
+                messages.append(clean_val)
+
+        if messages:
+            display_text = "\n\n".join(messages)
         else:
-            display_text = "✅ Action executed successfully."
+            clean_text = re.sub(pattern, '', response).strip()
+            display_text = clean_text if clean_text else "✅ Action executed successfully."
 
         self.add_message(display_text, sender="mist")
-        
-        # Refresh sidebar to grab any new session headers generated by the AI
         self.refresh_history_sidebar()
         
         self.search_bar.setEnabled(True)
