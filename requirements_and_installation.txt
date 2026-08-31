@@ -1,0 +1,76 @@
+================================================================================
+                    MIXTRAL AI ASSISTANT - SETUP & INSTALLATION
+================================================================================
+
+[ 1. SYSTEM REQUIREMENTS ]
+--------------------------------------------------------------------------------
+- OS: Windows 10 / 11 (64-bit)
+- Python: Version 3.10 to 3.12 installed (Ensure "Add Python to PATH" is checked)
+- Terminal: PowerShell or Command Prompt
+- Network: Active internet connection for initial model downloads and web routing
+
+
+[ 2. WORKSPACE DIRECTORY SETUP ]
+--------------------------------------------------------------------------------
+1. Create a dedicated folder on your system:
+   C:\Users\<YourUsername>\Mixtral AI\
+
+2. Download the project repository ZIP file.
+3. Extract all files directly into your workspace folder so the structure looks like this:
+
+   Mixtral AI/
+   ├── assets/
+   │   ├── GoogleSans-VariableFont_GRAD,opsz,wght.ttf
+   │   ├── GoogleSansCode-VariableFont_MONO,wght.ttf
+   │   └── ... (additional fonts)
+   ├── wolf.png
+   ├── connector.py
+   ├── home.py
+   ├── port.py
+   ├── canvas.py
+   ├── model_menu.py
+   ├── settings.py
+   └── requirements_and_installation.txt
+
+
+[ 3. PYTHON ENVIRONMENT & DEPENDENCIES ]
+--------------------------------------------------------------------------------
+Open PowerShell / Command Prompt inside your project folder and install the required 
+Python libraries:
+
+'''bash pip install PyQt5 requests psutil '''
+
+
+[ 4. OLLAMA INSTALLATION & AUTHENTICATION ]
+--------------------------------------------------------------------------------
+1. Install Ollama:
+   - Download the Windows installer from https://ollama.com/download/windows
+   - Run the installer and ensure Ollama is running in your Windows System Tray.
+
+2. Authenticate / Link your PC to Ollama:
+   - Open a terminal and log into your Ollama account so your machine has access 
+     to push/pull custom registry models:
+
+   '''bash ollama login '''
+
+   - Follow the prompt in your browser/terminal to authorize your machine.
+
+
+[ 5. MODEL SETUP (7K, MASE, & CORES) ]
+--------------------------------------------------------------------------------
+The application relies on backend models for search evaluation and agentic workflows.
+
+To add the additional models we have an Model_Installer.py which will automatically install all our models for you. just run the script.
+
+
+[ 6. LAUNCHING THE APPLICATION ]
+--------------------------------------------------------------------------------
+1. Ensure the Ollama daemon is running in the background.
+2. Ensure you have ran the Model_Installer.py by running the command
+    '''bash python Model_Installer.py '''
+3. Launch the application via terminal:
+
+   python connector.py
+
+4. The Mixtral desktop interface will launch and connect directly to your local Ollama port.
+================================================================================
