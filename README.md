@@ -47,7 +47,7 @@ Before you begin, ensure you have met the following requirements:
 2. Download the project repository ZIP file.
 3. Extract all files directly into your workspace folder so the structure looks like this:
 
-Mixtral AI/ ├── assets/ │ ├── GoogleSans-VariableFont_GRAD,opsz,wght.ttf │ ├── GoogleSansCode-VariableFont_MONO,wght.ttf │ └── ... (additional fonts) ├── wolf.png ├── connector.py ├── home.py ├── port.py ├── canvas.py ├── model_menu.py ├── settings.py └── requirements_and_installation.txt
+Mixtral AI/ ├── assets/ │ ├── GoogleSans-VariableFont_GRAD,opsz,wght.ttf │ ├── GoogleSansCode-VariableFont_MONO,wght.ttf │ └── ... (additional fonts) ├── wolf.png ├── connector.py ├── home.py ├── port.py ├── canvas.py ├── model_menu.py ├── settings.py 
 
 
 [ 3. PYTHON ENVIRONMENT & DEPENDENCIES ]
