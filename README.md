@@ -69,7 +69,7 @@ Python libraries:
 
 '''bash 
 pip install PyQt5 requests psutil 
-'''
+ '''
 
 
 [ 4. OLLAMA INSTALLATION & AUTHENTICATION ]
