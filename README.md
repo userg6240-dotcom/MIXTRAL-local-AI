@@ -67,7 +67,9 @@ Before you begin, ensure you have met the following requirements:
 Open PowerShell / Command Prompt inside your project folder and install the required 
 Python libraries:
 
-'''bash pip install PyQt5 requests psutil '''
+'''bash 
+pip install PyQt5 requests psutil 
+'''
 
 
 [ 4. OLLAMA INSTALLATION & AUTHENTICATION ]
@@ -80,7 +82,9 @@ Python libraries:
    - Open a terminal and log into your Ollama account so your machine has access 
      to push/pull custom registry models:
 
-   '''bash ollama login '''
+   '''bash
+    ollama login
+   '''
 
    - Follow the prompt in your browser/terminal to authorize your machine.
 
@@ -96,11 +100,13 @@ To add the additional models we have an Model_Installer.py which will automatica
 --------------------------------------------------------------------------------
 1. Ensure the Ollama daemon is running in the background.
 2. Ensure you have ran the Model_Installer.py by running the command
-    '''bash python Model_Installer.py '''
-3. Launch the application via terminal:
+    '''bash
+   python Model_Installer.py
+   '''
+4. Launch the application via terminal:
 
    python connector.py
 
-4. The Mixtral desktop interface will launch and connect directly to your local Ollama port.
+5. The Mixtral desktop interface will launch and connect directly to your local Ollama port.
 ================================================================================
 
