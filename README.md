@@ -67,7 +67,7 @@ Before you begin, ensure you have met the following requirements:
 Open PowerShell / Command Prompt inside your project folder and install the required 
 Python libraries:
 
-'''bash 
+''' 
 pip install PyQt5 requests psutil 
  '''
 
